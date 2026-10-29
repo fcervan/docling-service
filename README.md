@@ -1,8 +1,18 @@
 # Docling Service
 
-Serviço HTTP que recebe **um documento** e devolve o **texto estruturado** no formato JSON do Docling, pronto para RAG, indexação ou uso por qualquer aplicação.
+[![CI](https://github.com/fcervan/docling-service/actions/workflows/ci.yml/badge.svg)](https://github.com/fcervan/docling-service/actions/workflows/ci.yml)
+[![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.104%2B-009688.svg?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![Docling](https://img.shields.io/badge/Docling-2.145.0-orange.svg)](https://github.com/docling-project/docling)
+[![Docker](https://img.shields.io/badge/docker-ready-2496ED.svg?logo=docker&logoColor=white)](Dockerfile)
+[![Tests](https://img.shields.io/badge/tests-34%20passed-brightgreen.svg)](tests/)
+[![Coverage](https://img.shields.io/badge/coverage-100%25-brightgreen.svg)](tests/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
+[![Last commit](https://img.shields.io/github/last-commit/fcervan/docling-service.svg)](https://github.com/fcervan/docling-service/commits/main)
 
-Extraído do projeto `assistente-suporte` para ser reutilizado por vários apps, com autenticação por API key, limites de segurança e deploy independente (AWS).
+Serviço HTTP independente que recebe **um documento** e devolve o **texto estruturado** no formato JSON do Docling, pronto para RAG, indexação ou uso por qualquer aplicação.
+
+A imagem é autocontida e roda em qualquer host com Docker. A autenticação é feita por API key, com limites de tamanho, tipo de arquivo, timeout e rate limit.
 
 > **Segurança:** este repositório não contém chaves, tokens, usuários ou senhas. O `.env` é ignorado pelo Git e o serviço guarda apenas o **hash SHA-256** das API keys. Em produção, defina `DOCLING_DOCS_ENABLED=0`.
 
@@ -39,7 +49,7 @@ Erros: `400` arquivo inválido/vazio, `401` sem key ou key inválida, `413` acim
 
 | Método | Rota | Auth | Descrição |
 |---|---|---|---|
-| `GET` | `/health` | não | Liveness para ALB/ECS |
+| `GET` | `/health` | não | Liveness para health check |
 | `GET` | `/v1/info` | não | Versões, formatos e limites (sem segredos) |
 | `POST` | `/v1/convert` | `X-API-Key` | Converte um documento |
 | `GET` | `/docs` | não | OpenAPI interativo |
@@ -63,13 +73,13 @@ Preencha o `.env` do serviço com a linha `DOCLING_API_KEYS` e suba:
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-uvicorn app.main:app --reload --port 8000
+uvicorn app.main:app --reload --port 8765
 ```
 
 Teste:
 
 ```bash
-curl -X POST http://localhost:8000/v1/convert \
+curl -X POST http://localhost:8765/v1/convert \
   -H "X-API-Key: <sua-api-key>" \
   -F "file=@manual.pdf"
 ```
@@ -78,8 +88,10 @@ Ou via Docker:
 
 ```bash
 docker build -t docling-service .
-docker run --rm -p 8000:8000 --env-file .env docling-service
+docker run --rm -p 8765:8765 --env-file .env docling-service
 ```
+
+Para consumir de outro container na mesma rede Docker, anexe o serviço à rede do app e dê um alias, por exemplo `--network minha-rede --network-alias docling`.
 
 ## Variáveis de ambiente
 
@@ -107,25 +119,26 @@ docker run --rm -p 8000:8000 --env-file .env docling-service
 - **Container non-root**, healthcheck e modelos baixados/cacheados no build via `assets/prefetch.pdf` (sem egress em runtime).
 - **Nunca loga** a API key nem o conteúdo do documento.
 
-Nunca faça commit de `.env`, chaves em README, prints ou variáveis de CI. Em produção use **AWS Secrets Manager** ou **SSM Parameter Store**.
+Nunca faça commit de `.env`, chaves em README, prints ou variáveis de CI. Em produção, injete as chaves por variável de ambiente ou pelo gerenciador de segredos da sua infraestrutura.
 
-## Deploy na AWS
+## Deploy
 
-Sugestão para começar (síncrono):
+A imagem é autocontida e pode rodar em Docker, Docker Compose, Kubernetes ou qualquer orquestrador de containers:
 
-1. **ECR**: build e push da imagem.
-2. **Secrets Manager**: segredo com `DOCLING_API_KEYS` (JSON de hashes), injetado nas tasks (rotação = novo deploy, sem rebuild).
-3. **ECS Fargate**: 4 vCPU / 8 GB, 1 task, autoscaling por CPU, health check `/health`.
-4. **ALB interno** + TLS (ACM) + AWS WAF; subnets privadas.
-5. **CloudWatch Logs** e alarmes de 5xx/latência.
-6. **Idle timeout do ALB** ≥ `DOCLING_CONVERT_TIMEOUT` (ex.: 300s).
+```bash
+docker build -t docling-service .
+docker run -d --name docling-service \
+  -p 8765:8765 --env-file .env --restart unless-stopped docling-service
+```
 
-Notas:
+Recomendações:
 
-- **Evite API Gateway** no caminho síncrono: o limite de 29s é menor que conversões grandes.
-- Se arquivos grandes/picos passarem a incomodar, evolua para assíncrono (SQS + `POST /v1/jobs` + `GET /v1/jobs/{id}`) mantendo o `/v1/convert`.
+- Exponha o serviço atrás de um proxy reverso com **HTTPS**.
+- Injete `DOCLING_API_KEYS` via secret manager ou variável de ambiente do orquestrador.
+- Mantenha `DOCLING_DOCS_ENABLED=0` em exposição pública.
+- Configure limites de CPU/memória e use **1 worker** por instância (o Docling é pesado em memória).
+- Se houver arquivos grandes ou picos, evolua para assíncrono (`POST /v1/jobs` + `GET /v1/jobs/{id}`) mantendo o `/v1/convert`.
 - O timeout usa thread + `asyncio.wait_for`; a thread não é morta à força. Para cancelamento real, use processo separado/fila.
-- Rode **1 worker** por task: o Docling é pesado em memória.
 
 ## Testes
 
@@ -153,6 +166,7 @@ docling-service/
 ├── Dockerfile
 ├── requirements.txt
 ├── requirements-dev.txt
+├── LICENSE
 └── .env.example
 ```
 
@@ -174,4 +188,6 @@ texto_md = dados["markdown"]
 documento = dados["document"]
 ```
 
-No `assistente-suporte`, o módulo `api/src/ingest_docling.py` é esse cliente HTTP — ele persiste `markdown` e `document` em `data/processed` para manter `reingest_v2` e o chunking atuais funcionando.
+## Licença
+
+Distribuído sob a licença MIT — veja [LICENSE](LICENSE).
