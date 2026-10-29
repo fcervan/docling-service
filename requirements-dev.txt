@@ -1,0 +1,7 @@
+pytest
+pytest-cov
+ruff==0.17.0
+httpx
+fastapi
+python-multipart
+pydantic>=2
