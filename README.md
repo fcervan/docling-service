@@ -8,7 +8,7 @@
 [![Tests](https://img.shields.io/badge/tests-34%20passed-brightgreen.svg)](tests/)
 [![Coverage](https://img.shields.io/badge/coverage-100%25-brightgreen.svg)](tests/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
-[![Last commit](https://img.shields.io/github/last-commit/fcervan/docling-service.svg)](https://github.com/fcervan/docling-service/commits/main)
+[![Last commit](https://img.shields.io/github/last-commit/fcervan/docling-service/main?label=last%20commit)](https://github.com/fcervan/docling-service/commits/main)
 
 Serviço HTTP independente que recebe **um documento** e devolve o **texto estruturado** no formato JSON do Docling, pronto para RAG, indexação ou uso por qualquer aplicação.
 
