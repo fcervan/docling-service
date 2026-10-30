@@ -18,13 +18,16 @@ RUN pip install --no-cache-dir -r requirements.txt
 RUN useradd --create-home --uid 10001 appuser
 COPY --chown=appuser:appuser app/ ./app/
 COPY --chown=appuser:appuser assets/ ./assets/
-USER appuser
+COPY --chown=appuser:appuser scripts/ ./scripts/
 
-# Converte um PDF mínimo no build para baixar/cachear os modelos do Docling.
+# Baixa/cacheia modelos do Docling e do OCR no build (inclui PDF sem texto).
 ARG DOCLING_PREFETCH=1
 RUN if [ "$DOCLING_PREFETCH" = "1" ]; then \
-        python -c "from docling.document_converter import DocumentConverter; DocumentConverter().convert('assets/prefetch.pdf')"; \
+        python scripts/prefetch_models.py && \
+        chown -R appuser:appuser /home/appuser/.cache; \
     fi
+
+USER appuser
 
 EXPOSE 8765
 

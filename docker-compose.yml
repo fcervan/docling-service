@@ -1,0 +1,10 @@
+services:
+  docling-service:
+    build: .
+    image: docling-service:latest
+    container_name: docling-service
+    ports:
+      - "8765:8765"
+    env_file:
+      - .env
+    restart: unless-stopped

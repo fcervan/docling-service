@@ -12,7 +12,7 @@
 
 Serviço HTTP independente que recebe **um documento** e devolve o **texto estruturado** no formato JSON do Docling, pronto para RAG, indexação ou uso por qualquer aplicação.
 
-A imagem é autocontida e roda em qualquer host com Docker. A autenticação é feita por API key, com limites de tamanho, tipo de arquivo, timeout e rate limit.
+A imagem é autocontida e roda em qualquer host com Docker. A autenticação é feita por API key, com limites de tamanho, tipo de arquivo, timeout e rate limit. PDFs digitalizados são processados com OCR (RapidOCR), com os modelos já cacheados na imagem.
 
 > **Segurança:** este repositório não contém chaves, tokens, usuários ou senhas. O `.env` é ignorado pelo Git e o serviço guarda apenas o **hash SHA-256** das API keys. Em produção, defina `DOCLING_DOCS_ENABLED=0`.
 
@@ -68,12 +68,11 @@ O script imprime:
 - `DOCLING_API_KEY=...` → vai **somente** no app consumidor;
 - `DOCLING_API_KEYS={"app":"<sha256>"}` → vai no `.env` do serviço.
 
-Preencha o `.env` do serviço com a linha `DOCLING_API_KEYS` e suba:
+Preencha o `.env` do serviço com a linha `DOCLING_API_KEYS` e suba com Compose:
 
 ```bash
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-uvicorn app.main:app --reload --port 8765
+docker compose up -d --build
+docker compose logs -f
 ```
 
 Teste:
@@ -84,14 +83,68 @@ curl -X POST http://localhost:8765/v1/convert \
   -F "file=@manual.pdf"
 ```
 
-Ou via Docker:
+Para desenvolvimento sem Docker:
 
 ```bash
-docker build -t docling-service .
-docker run --rm -p 8765:8765 --env-file .env docling-service
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+uvicorn app.main:app --reload --port 8765
 ```
 
-Para consumir de outro container na mesma rede Docker, anexe o serviço à rede do app e dê um alias, por exemplo `--network minha-rede --network-alias docling`.
+## Configuração via `.env`
+
+O `docker-compose.yml` usa `env_file: .env`, então o container lê as variáveis **no momento em que é criado**. O `.env` é local e está no `.gitignore`; o `.dockerignore` também impede que ele seja copiado para a imagem. Nunca versione esse arquivo.
+
+Fluxo inicial:
+
+```bash
+cp .env.example .env
+python scripts/gerar_api_key.py
+```
+
+O script gera dois valores:
+
+- `DOCLING_API_KEY=...` → fica **somente** no `.env` do app consumidor.
+- `DOCLING_API_KEYS={"app":"<sha256>"}` → vai no `.env` **deste serviço**.
+
+Exemplo de `.env` com duas aplicações:
+
+```dotenv
+DOCLING_API_KEYS={"app-a":"<sha256-da-key-a>","app-b":"<sha256-da-key-b>"}
+DOCLING_MAX_UPLOAD_MB=50
+DOCLING_CONVERT_TIMEOUT=300
+DOCLING_RATE_LIMIT_PER_MINUTE=60
+DOCLING_MAX_WORKERS=2
+DOCLING_SCHEMA_VERSION=1
+DOCLING_DOCS_ENABLED=1
+```
+
+O valor de `DOCLING_API_KEYS` é um JSON em uma única linha. Cada hash precisa ter 64 caracteres hexadecimais; qualquer outro valor impede a inicialização do serviço.
+
+### Recarregando o `.env`
+
+Docker **não** altera as variáveis de um container já criado. Por isso:
+
+- `docker compose restart` reinicia o processo com o ambiente antigo — **não recarrega** o `.env`.
+- `docker compose up -d` nem sempre recria o container quando apenas o conteúdo do `env_file` mudou.
+- `docker compose up -d --force-recreate` recria o container e garante a leitura do `.env` atualizado.
+
+```bash
+# depois de adicionar ou trocar uma key no .env
+docker compose up -d --force-recreate
+docker compose logs -f
+```
+
+O `--force-recreate` **não** reconstrói a imagem; ele apenas recria o container. Use `--build` quando mudar código, `Dockerfile`, `requirements*.txt` ou `scripts/prefetch_models.py`:
+
+| Situação | Comando |
+|---|---|
+| Primeira subida ou mudança de código/imagem | `docker compose up -d --build` |
+| Mudou apenas o `.env` | `docker compose up -d --force-recreate` |
+| Quer só ver logs/status | `docker compose logs -f` / `docker compose ps` |
+| Parar e remover o container | `docker compose down` |
+
+Sem `DOCLING_API_KEYS` configurado, o serviço responde `503` (fail-closed).
 
 ## Variáveis de ambiente
 
@@ -109,14 +162,14 @@ Para consumir de outro container na mesma rede Docker, anexe o serviço à rede 
 
 - **Fail-closed**: sem `DOCLING_API_KEYS` configurado, `/v1/convert` responde `503`.
 - **Somente hashes**: o serviço compara SHA-256 em tempo constante (`hmac.compare_digest`).
-- **Uma key por aplicação**: revogação/rotação independentes (aplicadas no restart/redeploy), com rate limit por app.
+- **Uma key por aplicação**: revogação/rotação independentes (aplicadas ao recriar o container/redeploy), com rate limit por app.
 - **Sem SSRF**: apenas upload; não há conversão por URL nem por caminho informado pelo cliente.
 - **Allowlist**: extensão e MIME validados; tipos executáveis são rejeitados.
 - **Tamanho e timeout**: limites configuráveis para evitar PDF bombs/arquivos gigantes.
 - **Temp isolado**: cada conversão usa diretório temporário próprio, removido ao final.
 - **Recursos limitados**: rode em container com CPU/memória limitadas; a descompressão interna de formatos Office é feita pelo Docling.
 - **Erros genéricos**: detalhes internos/stack trace não vão para o cliente.
-- **Container non-root**, healthcheck e modelos baixados/cacheados no build via `assets/prefetch.pdf` (sem egress em runtime).
+- **Container non-root**, healthcheck e modelos de layout/tabela/OCR baixados e cacheados no build via `scripts/prefetch_models.py` (sem egress em runtime).
 - **Nunca loga** a API key nem o conteúdo do documento.
 
 Nunca faça commit de `.env`, chaves em README, prints ou variáveis de CI. Em produção, injete as chaves por variável de ambiente ou pelo gerenciador de segredos da sua infraestrutura.
@@ -126,10 +179,10 @@ Nunca faça commit de `.env`, chaves em README, prints ou variáveis de CI. Em p
 A imagem é autocontida e pode rodar em Docker, Docker Compose, Kubernetes ou qualquer orquestrador de containers:
 
 ```bash
-docker build -t docling-service .
-docker run -d --name docling-service \
-  -p 8765:8765 --env-file .env --restart unless-stopped docling-service
+docker compose up -d --build
 ```
+
+Para usar a imagem em outro orquestrador, publique `docling-service:latest` e injete `DOCLING_API_KEYS` por variável de ambiente/secret.
 
 Recomendações:
 
@@ -161,9 +214,11 @@ docling-service/
 │   ├── config.py     # env, allowlists e limites
 │   └── schemas.py    # contrato Pydantic
 ├── scripts/gerar_api_key.py
+├── scripts/prefetch_models.py
 ├── assets/prefetch.pdf   # usado só no build para cachear modelos
 ├── tests/
 ├── Dockerfile
+├── docker-compose.yml
 ├── requirements.txt
 ├── requirements-dev.txt
 ├── LICENSE
