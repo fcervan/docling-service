@@ -66,6 +66,11 @@ pytest tests/ -q --cov=app --cov-report=term-missing
 - Cobertura atual: 100% (`app/`).
 - O CI roda `ruff` e `pytest` em `app`/`tests`.
 
+## Escopo de acesso
+
+- Trabalhe **apenas** neste repositório (`docling-service`). Não leia, liste nem altere arquivos de outros projetos da máquina.
+- Se precisar acessar outro projeto para concluir uma tarefa, **pare e peça autorização explícita ao usuário, com justificativa**. Sem autorização, não acesse.
+
 ## Regras do projeto
 
 - Toda mudança de comportamento, contrato, variável de ambiente, endpoint ou estrutura exige atualização do `README.md` antes de encerrar.
