@@ -5,7 +5,7 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.104%2B-009688.svg?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![Docling](https://img.shields.io/badge/Docling-2.145.0-orange.svg)](https://github.com/docling-project/docling)
 [![Docker](https://img.shields.io/badge/docker-ready-2496ED.svg?logo=docker&logoColor=white)](Dockerfile)
-[![Tests](https://img.shields.io/badge/tests-34%20passed-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-50%20passed-brightgreen.svg)](tests/)
 [![Coverage](https://img.shields.io/badge/coverage-100%25-brightgreen.svg)](tests/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
 [![Last commit](https://img.shields.io/github/last-commit/fcervan/docling-service/main?label=last%20commit)](https://github.com/fcervan/docling-service/commits/main)
@@ -13,6 +13,8 @@
 Serviço HTTP independente que recebe **um documento** e devolve o **texto estruturado** no formato JSON do Docling, pronto para RAG, indexação ou uso por qualquer aplicação.
 
 A imagem é autocontida e roda em qualquer host com Docker. A autenticação é feita por API key, com limites de tamanho, tipo de arquivo, timeout e rate limit. PDFs digitalizados são processados com OCR (RapidOCR), com os modelos já cacheados na imagem.
+
+O container é **CPU-only**: o `torch` vem do índice `whl/cpu` e a imagem não carrega as libs `nvidia-*` (~3 GB economizados). O OCR roda **sob demanda** (`DOCLING_OCR_MODE=auto`): converte sem OCR e só repete em PDF com texto residual. Os modelos são descartados após `DOCLING_IDLE_UNLOAD_SECONDS` sem conversão, devolvendo a memória ao host.
 
 > **Segurança:** este repositório não contém chaves, tokens, usuários ou senhas. O `.env` é ignorado pelo Git e o serviço guarda apenas o **hash SHA-256** das API keys. Em produção, defina `DOCLING_DOCS_ENABLED=0`.
 
@@ -117,6 +119,9 @@ DOCLING_RATE_LIMIT_PER_MINUTE=60
 DOCLING_MAX_WORKERS=2
 DOCLING_SCHEMA_VERSION=1
 DOCLING_DOCS_ENABLED=1
+DOCLING_OCR_MODE=auto
+DOCLING_OCR_MIN_CHARS_PAGE=20
+DOCLING_IDLE_UNLOAD_SECONDS=900
 ```
 
 O valor de `DOCLING_API_KEYS` é um JSON em uma única linha. Cada hash precisa ter 64 caracteres hexadecimais; qualquer outro valor impede a inicialização do serviço.
@@ -157,6 +162,27 @@ Sem `DOCLING_API_KEYS` configurado, o serviço responde `503` (fail-closed).
 | `DOCLING_MAX_WORKERS` | `2` | Conversões paralelas por processo |
 | `DOCLING_SCHEMA_VERSION` | `1` | Versão do contrato devolvida ao cliente |
 | `DOCLING_DOCS_ENABLED` | `1` | Expõe `/docs` e `/openapi.json`; use `0` em produção |
+| `DOCLING_OCR_MODE` | `auto` | `auto` (sem OCR + fallback em PDF escaneado), `on` ou `off` |
+| `DOCLING_OCR_MIN_CHARS_PAGE` | `20` | Caracteres/página abaixo disso disparam o OCR no modo `auto` |
+| `DOCLING_IDLE_UNLOAD_SECONDS` | `900` | Descarta os modelos após N segundos sem conversão (`0` desliga) |
+
+## Recursos
+
+Medições em um host **2 vCPU / 3,7 GiB** com um PDF digital de 5 KB:
+
+| Momento | RSS |
+|---|---|
+| Serviço ocioso, nunca converteu | ~40–120 MiB |
+| Após a 1ª conversão digital | ~0,85–1,4 GiB (CPU-only) |
+| Após OCR (PDF escaneado) | ~1,5 GiB |
+| Após `DOCLING_IDLE_UNLOAD_SECONDS` | ~0,3–0,6 GiB (o alocador do torch não devolve tudo) |
+
+Observações:
+
+- A primeira conversão carrega layout, TableFormer e (se necessário) RapidOCR: some 3–10 s.
+- Depois do idle unload, a próxima conversão paga esse carregamento de novo.
+- As conversões são **serializadas** por um lock: um único conjunto de modelos em memória (o Docling não é thread-safe e duas cópias dobram o RSS). `DOCLING_MAX_WORKERS` continua limitando o pool de threads, mas o processamento efetivo é um por vez.
+- OCR é o que mais custa tempo/memória: mantenha `auto` para KBs majoritariamente digitais.
 
 ## Segurança
 
@@ -189,7 +215,10 @@ Recomendações:
 - Exponha o serviço atrás de um proxy reverso com **HTTPS**.
 - Injete `DOCLING_API_KEYS` via secret manager ou variável de ambiente do orquestrador.
 - Mantenha `DOCLING_DOCS_ENABLED=0` em exposição pública.
-- Configure limites de CPU/memória e use **1 worker** por instância (o Docling é pesado em memória).
+- O compose já publica a porta em `127.0.0.1` e limita `mem_limit: 2g` / `cpus: 1.5`; ajuste ao porte do host.
+- Use **1 worker** por instância (o Docling é pesado em memória); com o lock interno, conversões concorrentes não multiplicam modelos.
+- A imagem CPU-only fica em **~2,7 GB** (era 11,5 GB com torch CUDA) e o serviço ocioso consome **~40 MiB**, subindo para ~0,9–1,4 GiB após uma conversão digital e ~1,5 GiB no pior caso com OCR. O unload por inatividade devolve a maior parte.
+- Não construa a imagem em hosts pequenos (2 vCPU / < 1 GiB livre): a camada de `pip install` é pesada. Build local + `docker save | ssh docker load` funciona bem.
 - Se houver arquivos grandes ou picos, evolua para assíncrono (`POST /v1/jobs` + `GET /v1/jobs/{id}`) mantendo o `/v1/convert`.
 - O timeout usa thread + `asyncio.wait_for`; a thread não é morta à força. Para cancelamento real, use processo separado/fila.
 

@@ -54,6 +54,9 @@ class Settings:
     convert_timeout: float
     rate_limit_per_minute: int
     schema_version: str
+    ocr_mode: str
+    ocr_min_chars_page: int
+    idle_unload_seconds: int
 
     @property
     def max_upload_bytes(self) -> int:
@@ -105,6 +108,14 @@ def _float_env(nome: str, padrao: float, minimo: float = 1.0) -> float:
     return max(minimo, valor)
 
 
+def _ocr_mode_env() -> str:
+    """auto = tenta sem OCR e repete se o texto extraído for residual."""
+    modo = (os.getenv("DOCLING_OCR_MODE", "auto") or "auto").strip().lower()
+    if modo not in {"auto", "on", "off"}:
+        raise ConfigError("DOCLING_OCR_MODE deve ser auto, on ou off")
+    return modo
+
+
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     return Settings(
@@ -113,6 +124,9 @@ def get_settings() -> Settings:
         convert_timeout=_float_env("DOCLING_CONVERT_TIMEOUT", 300.0, minimo=0.1),
         rate_limit_per_minute=_int_env("DOCLING_RATE_LIMIT_PER_MINUTE", 60),
         schema_version=os.getenv("DOCLING_SCHEMA_VERSION", "1"),
+        ocr_mode=_ocr_mode_env(),
+        ocr_min_chars_page=_int_env("DOCLING_OCR_MIN_CHARS_PAGE", 20, minimo=1),
+        idle_unload_seconds=_int_env("DOCLING_IDLE_UNLOAD_SECONDS", 900),
     )
 
 

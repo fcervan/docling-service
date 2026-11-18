@@ -23,6 +23,8 @@ class InfoResponse(BaseModel):
     supported_extensions: list[str]
     max_upload_mb: int
     convert_timeout_seconds: float
+    ocr_mode: str
+    idle_unload_seconds: int
 
 
 class HealthResponse(BaseModel):

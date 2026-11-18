@@ -5,15 +5,17 @@ Serviço HTTP independente que converte documentos no JSON estruturado do Doclin
 ## Stack
 
 - Python 3.12, FastAPI, Docling 2.145.0, RapidOCR.
-- Docker + Docker Compose; porta **8765** no host e no container.
+- Docker + Docker Compose; porta **8765** publicada só em `127.0.0.1` (a API consome pela rede interna).
 - pytest + pytest-cov, ruff 0.17.0.
 - Auth por API key com hash SHA-256 e rate limit por aplicação.
+- **CPU-only**: `torch`/`torchvision` vêm do índice `whl/cpu` no Dockerfile, antes do `requirements.txt` (evita ~3 GB de libs `nvidia-*`).
+- OCR sob demanda (`DOCLING_OCR_MODE=auto`), conversões serializadas por lock e unload dos modelos após `DOCLING_IDLE_UNLOAD_SECONDS`.
 
 ## Arquitetura
 
 - `app/main.py` — rotas, validações de upload/MIME, timeout e resposta.
 - `app/auth.py` — verificação da API key (`hmac.compare_digest`) e rate limit.
-- `app/converter.py` — wrapper lazy do Docling.
+- `app/converter.py` — wrapper lazy do Docling: converter em cache por modo de OCR, heurística de texto residual e `liberar()` para o unload.
 - `app/config.py` — parsing de env, allowlists e limites.
 - `app/schemas.py` — contrato Pydantic.
 - `scripts/gerar_api_key.py` — gera a key em texto puro + hash SHA-256.

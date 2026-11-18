@@ -7,14 +7,18 @@ import logging
 import os
 import shutil
 import tempfile
+import threading
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.gzip import GZipMiddleware
 
 from . import __version__
+from . import converter as converter_mod
 from .auth import verificar_api_key
 from .config import ALLOWED_MIMES, DANGEROUS_MIMES, SUPPORTED, get_settings
 from .converter import ConversionError, converter, versao_docling
@@ -24,6 +28,26 @@ logger = logging.getLogger("docling-service")
 
 _DOCS = os.getenv("DOCLING_DOCS_ENABLED", "1").strip().lower() not in {"0", "false", "no"}
 
+
+def _monitor_idle() -> None:
+    """Libera os modelos do Docling depois de N segundos sem conversão."""
+    while True:
+        time.sleep(30)
+        limite = get_settings().idle_unload_seconds
+        if limite <= 0:
+            continue
+        ocioso = converter_mod.segundos_ocioso()
+        if ocioso is not None and ocioso >= limite:
+            converter_mod.liberar(limite)
+
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    if get_settings().idle_unload_seconds > 0:
+        threading.Thread(target=_monitor_idle, name="idle-unload", daemon=True).start()
+    yield
+
+
 app = FastAPI(
     title="Docling Service",
     version=__version__,
@@ -31,6 +55,7 @@ app = FastAPI(
     docs_url="/docs" if _DOCS else None,
     openapi_url="/openapi.json" if _DOCS else None,
     redoc_url=None,
+    lifespan=_lifespan,
 )
 app.add_middleware(GZipMiddleware, minimum_size=1024)
 
@@ -82,6 +107,8 @@ def info() -> dict:
         "supported_extensions": list(SUPPORTED),
         "max_upload_mb": settings.max_upload_mb,
         "convert_timeout_seconds": settings.convert_timeout,
+        "ocr_mode": settings.ocr_mode,
+        "idle_unload_seconds": settings.idle_unload_seconds,
     }
 
 

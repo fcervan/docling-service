@@ -13,6 +13,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 COPY requirements.txt .
+# torch CPU-only primeiro: o wheel default do PyPI embute CUDA e puxa ~3 GB de
+# libs nvidia (inúteis em host sem GPU). O Docling só usa CPU aqui.
+RUN pip install --no-cache-dir torch==2.15.0 torchvision==0.29.1 \
+        --index-url https://download.pytorch.org/whl/cpu
 RUN pip install --no-cache-dir -r requirements.txt
 
 RUN useradd --create-home --uid 10001 appuser

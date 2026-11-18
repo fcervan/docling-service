@@ -3,8 +3,14 @@ services:
     build: .
     image: docling-service:latest
     container_name: docling-service
+    # só o host (ou a rede docker interna) alcança o serviço
     ports:
-      - "8765:8765"
+      - "127.0.0.1:8765:8765"
     env_file:
       - .env
+    # Docling carrega modelos pesados: limite evita derrubar o host inteiro.
+    # PDFs escaneados grandes podem exigir mais (ajuste conforme o porte do host).
+    mem_limit: 2g
+    memswap_limit: 2g
+    cpus: 1.5
     restart: unless-stopped

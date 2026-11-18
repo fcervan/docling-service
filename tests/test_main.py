@@ -2,6 +2,7 @@ import asyncio
 import time
 
 import httpx
+import pytest
 
 from app import config, main
 from app.converter import ConversionError
@@ -43,6 +44,8 @@ def test_info_sem_segredos():
     corpo = r.json()
     assert corpo["service"] == "docling-service"
     assert ".pdf" in corpo["supported_extensions"]
+    assert corpo["ocr_mode"] == "off"
+    assert corpo["idle_unload_seconds"] == 900
     assert "api_keys" not in corpo
 
 
@@ -168,3 +171,82 @@ def test_convert_timeout(monkeypatch):
     config.reset_settings()
     r = _req("POST", "/v1/convert", headers=HEADERS, files=_pdf())
     assert r.status_code == 504
+
+
+def test_monitor_idle_libera_modelos(monkeypatch):
+    monkeypatch.setenv("DOCLING_IDLE_UNLOAD_SECONDS", "60")
+    config.reset_settings()
+    chamadas = []
+    monkeypatch.setattr(main.converter_mod, "segundos_ocioso", lambda: 120)
+    monkeypatch.setattr(main.converter_mod, "liberar", lambda *args: chamadas.append(True))
+    estado = {"n": 0}
+
+    def dorme(_segundos):
+        estado["n"] += 1
+        if estado["n"] > 1:
+            raise SystemExit
+
+    monkeypatch.setattr(main.time, "sleep", dorme)
+    with pytest.raises(SystemExit):
+        main._monitor_idle()
+    assert chamadas == [True]
+
+
+def test_monitor_idle_desligado(monkeypatch):
+    monkeypatch.setenv("DOCLING_IDLE_UNLOAD_SECONDS", "0")
+    config.reset_settings()
+    chamadas = []
+    monkeypatch.setattr(main.converter_mod, "segundos_ocioso", lambda: 999)
+    monkeypatch.setattr(main.converter_mod, "liberar", lambda *args: chamadas.append(True))
+    estado = {"n": 0}
+
+    def dorme(_segundos):
+        estado["n"] += 1
+        if estado["n"] > 1:
+            raise SystemExit
+
+    monkeypatch.setattr(main.time, "sleep", dorme)
+    with pytest.raises(SystemExit):
+        main._monitor_idle()
+    assert chamadas == []
+
+
+def test_lifespan_inicia_monitor(monkeypatch):
+    monkeypatch.setenv("DOCLING_IDLE_UNLOAD_SECONDS", "60")
+    config.reset_settings()
+    iniciados = []
+
+    class ThreadFalsa:
+        def __init__(self, target=None, name=None, daemon=None):
+            self.target, self.name, self.daemon = target, name, daemon
+
+        def start(self):
+            iniciados.append(self.name)
+
+    monkeypatch.setattr(main.threading, "Thread", ThreadFalsa)
+
+    async def rodar():
+        async with main._lifespan(main.app):
+            pass
+
+    asyncio.run(rodar())
+    assert iniciados == ["idle-unload"]
+
+
+def test_lifespan_sem_monitor(monkeypatch):
+    monkeypatch.setenv("DOCLING_IDLE_UNLOAD_SECONDS", "0")
+    config.reset_settings()
+    iniciados = []
+
+    class ThreadFalsa:
+        def __init__(self, *args, **kwargs):
+            iniciados.append(True)
+
+    monkeypatch.setattr(main.threading, "Thread", ThreadFalsa)
+
+    async def rodar():
+        async with main._lifespan(main.app):
+            pass
+
+    asyncio.run(rodar())
+    assert iniciados == []
